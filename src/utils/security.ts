@@ -28,56 +28,6 @@ export function getEnvVarName(
 }
 
 /**
- * Generates code for handling API key security
- *
- * @param scheme API key security scheme
- * @returns Generated code
- */
-export function generateApiKeySecurityCode(scheme: OpenAPIV3.ApiKeySecurityScheme): string {
-  const schemeName = 'schemeName'; // Placeholder, will be replaced in template
-  return `
-    if (scheme?.type === 'apiKey') {
-        const apiKey = process.env[\`${getEnvVarName(schemeName, 'API_KEY')}\`];
-        if (apiKey) {
-            if (scheme.in === 'header') {
-                headers[scheme.name.toLowerCase()] = apiKey;
-            }
-            else if (scheme.in === 'query') {
-                queryParams[scheme.name] = apiKey;
-            }
-            else if (scheme.in === 'cookie') {
-                headers['cookie'] = \`\${scheme.name}=\${apiKey}\${headers['cookie'] ? \`; \${headers['cookie']}\` : ''}\`;
-            }
-        }
-    }`;
-}
-
-/**
- * Generates code for handling HTTP security (Bearer/Basic)
- *
- * @returns Generated code
- */
-export function generateHttpSecurityCode(): string {
-  const schemeName = 'schemeName'; // Placeholder, will be replaced in template
-  return `
-    else if (scheme?.type === 'http') {
-        if (scheme.scheme?.toLowerCase() === 'bearer') {
-            const token = process.env[\`${getEnvVarName(schemeName, 'BEARER_TOKEN')}\`];
-            if (token) {
-                headers['authorization'] = \`Bearer \${token}\`;
-            }
-        } 
-        else if (scheme.scheme?.toLowerCase() === 'basic') {
-            const username = process.env[\`${getEnvVarName(schemeName, 'BASIC_USERNAME')}\`];
-            const password = process.env[\`${getEnvVarName(schemeName, 'BASIC_PASSWORD')}\`];
-            if (username && password) {
-                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
-            }
-        }
-    }`;
-}
-
-/**
  * Generates code for OAuth2 token acquisition
  *
  * @returns Generated code for OAuth2 token acquisition
@@ -191,7 +141,93 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         return null;
     }
 }
+
+/**
+ * Acquires an AuthNToken from the configured endpoint
+ *
+ * @returns Acquired token or null if unable to acquire
+ */
+async function acquireAuthNToken(): Promise<string | null> {
+    try {
+        // Get the token URL from environment variable or use default
+        const tokenUrl = process.env['AUTHN_TOKEN_URL'] || 'http://localhost:8089';
+
+        console.error(\`Requesting AuthNToken from \${tokenUrl}\`);
+        
+        // Make the token request
+        const response = await axios({
+            method: 'GET',
+            url: tokenUrl,
+            headers: {
+                'Accept': 'application/json'
+            },
+            timeout: 10000 // 10 second timeout
+        });
+        
+        // Process the response
+        if (response.data?.token) {
+            return response.data.token;
+        } else {
+            console.error(\`Failed to acquire AuthNToken from \${tokenUrl}: No token in response\`);
+            return null;
+        }
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(\`Error acquiring AuthNToken, check that your masstackctl server is running:\`, errorMessage);
+        return null;
+    }
+}
 `;
+}
+
+/**
+ * Generates code for handling API key security
+ *
+ * @param scheme API key security scheme
+ * @returns Generated code
+ */
+export function generateApiKeySecurityCode(scheme: OpenAPIV3.ApiKeySecurityScheme): string {
+  const schemeName = 'schemeName'; // Placeholder, will be replaced in template
+  return `
+    if (scheme?.type === 'apiKey') {
+        const apiKey = process.env[\`${getEnvVarName(schemeName, 'API_KEY')}\`];
+        if (apiKey) {
+            if (scheme.in === 'header') {
+                headers[scheme.name.toLowerCase()] = apiKey;
+            }
+            else if (scheme.in === 'query') {
+                queryParams[scheme.name] = apiKey;
+            }
+            else if (scheme.in === 'cookie') {
+                headers['cookie'] = \`\${scheme.name}=\${apiKey}\${headers['cookie'] ? \`; \${headers['cookie']}\` : ''}\`;
+            }
+        }
+    }`;
+}
+
+/**
+ * Generates code for handling HTTP security (Bearer/Basic)
+ *
+ * @returns Generated code
+ */
+export function generateHttpSecurityCode(): string {
+  const schemeName = 'schemeName'; // Placeholder, will be replaced in template
+  return `
+    else if (scheme?.type === 'http') {
+        if (scheme.scheme?.toLowerCase() === 'bearer') {
+            const token = process.env[\`${getEnvVarName(schemeName, 'BEARER_TOKEN')}\`];
+            if (token) {
+                headers['authorization'] = \`Bearer \${token}\`;
+            }
+        } 
+        else if (scheme.scheme?.toLowerCase() === 'basic') {
+            const username = process.env[\`${getEnvVarName(schemeName, 'BASIC_USERNAME')}\`];
+            const password = process.env[\`${getEnvVarName(schemeName, 'BASIC_PASSWORD')}\`];
+            if (username && password) {
+                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
+            }
+        }
+    }`;
 }
 
 /**
@@ -216,9 +252,9 @@ export function generateExecuteApiToolFunction(
             const scheme = allSecuritySchemes[schemeName];
             if (!scheme) return false;
             
-            // Special handling for AuthNToken - check if authnToken parameter is provided
+            // Special handling for AuthNToken - always return true since we can acquire it automatically
             if (schemeName === 'AuthNToken') {
-                return !!validatedArgs.authnToken;
+                return true;
             }
             
             // API Key security (header, query, cookie)
@@ -271,10 +307,16 @@ export function generateExecuteApiToolFunction(
         for (const [schemeName, scopesArray] of Object.entries(appliedSecurity)) {
             const scheme = allSecuritySchemes[schemeName];
             
-            // Special handling for AuthNToken - use the provided authnToken parameter
-            if (schemeName === 'AuthNToken' && validatedArgs.authnToken) {
-                headers['authorization'] = \`Bearer \${validatedArgs.authnToken}\`;
-                console.error(\`Applied AuthNToken from parameter as Bearer token\`);
+            // Special handling for AuthNToken - acquire token automatically
+            if (schemeName === 'AuthNToken') {
+                console.error('Attempting to acquire AuthNToken automatically');
+                const token = await acquireAuthNToken();
+                if (token) {
+                    headers['authorization'] = \`Bearer \${token}\`;
+                    console.error('Applied AuthNToken acquired automatically as Bearer token');
+                } else {
+                    console.error('Failed to acquire AuthNToken automatically');
+                }
                 continue;
             }
             
@@ -454,7 +496,7 @@ ${securityCode}
       url: requestUrl, 
       params: queryParams, 
       headers: headers,
-      ...(requestBodyData !== undefined && { data: requestBodyData }),
+      ...(requestBodyData !== undefined && { data: requestBodyData })
     };
 
     // Log request info to stderr (doesn't affect MCP output)
@@ -495,7 +537,7 @@ ${securityCode}
                 type: "text", 
                 text: \`API Response (Status: \${response.status}):\\n\${responseText}\` 
             } 
-        ], 
+        ]
     };
 
   } catch (error: unknown) {
@@ -548,9 +590,11 @@ export function getSecuritySchemesDocs(
 
     // Special handling for AuthNToken
     if (name === 'AuthNToken') {
-      docs += `- \`AuthNToken\`: Authentication token passed as parameter to each tool call\n`;
-      docs += `  This scheme requires providing an \`authnToken\` parameter with each API call.\n`;
-      docs += `  The token will be used as a Bearer token in the Authorization header.\n`;
+      docs += `- \`AuthNToken\`: Authentication token acquired automatically from token endpoint\n`;
+      docs += `  The server will automatically obtain the Bearer token by making a GET request to the configured URL.\n`;
+      docs += `  - Set \`AUTHN_TOKEN_URL\` environment variable to specify the token endpoint (default: http://localhost:8089)\n`;
+      docs += `  - The endpoint should return JSON in format: {"token": "ey..."}\n`;
+      docs += `  - No caching is implemented, token is requested on every API call\n`;
       continue;
     }
 

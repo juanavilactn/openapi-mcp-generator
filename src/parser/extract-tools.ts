@@ -112,21 +112,6 @@ export function generateInputSchemaAndDetails(
     if (param.required) required.push(param.name);
   });
 
-  // Check if AuthNToken security scheme is used in security requirements
-  const hasAuthNToken = securityRequirements.some(requirement =>
-    Object.keys(requirement).includes('AuthNToken')
-  );
-
-  // Add authnToken parameter if AuthNToken security scheme is present
-  if (hasAuthNToken && securitySchemes.AuthNToken) {
-    properties['authnToken'] = {
-      type: 'string',
-      description: 'Authentication token to be used as Bearer token in Authorization header'
-    };
-    required.push('authnToken');
-  }
-
-  // Process request body (if present)
   let requestBodyContentType: string | undefined = undefined;
 
   if (operation.requestBody) {
