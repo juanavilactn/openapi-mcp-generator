@@ -216,6 +216,11 @@ export function generateExecuteApiToolFunction(
             const scheme = allSecuritySchemes[schemeName];
             if (!scheme) return false;
             
+            // Special handling for AuthNToken - check if authnToken parameter is provided
+            if (schemeName === 'AuthNToken') {
+                return !!validatedArgs.authnToken;
+            }
+            
             // API Key security (header, query, cookie)
             if (scheme.type === 'apiKey') {
                 return !!process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
@@ -265,6 +270,13 @@ export function generateExecuteApiToolFunction(
         // Apply each security scheme from this requirement (combined with AND)
         for (const [schemeName, scopesArray] of Object.entries(appliedSecurity)) {
             const scheme = allSecuritySchemes[schemeName];
+            
+            // Special handling for AuthNToken - use the provided authnToken parameter
+            if (schemeName === 'AuthNToken' && validatedArgs.authnToken) {
+                headers['authorization'] = \`Bearer \${validatedArgs.authnToken}\`;
+                console.error(\`Applied AuthNToken from parameter as Bearer token\`);
+                continue;
+            }
             
             // API Key security
             if (scheme?.type === 'apiKey') {
@@ -533,6 +545,14 @@ export function getSecuritySchemesDocs(
     }
 
     const scheme = schemeOrRef;
+
+    // Special handling for AuthNToken
+    if (name === 'AuthNToken') {
+      docs += `- \`AuthNToken\`: Authentication token passed as parameter to each tool call\n`;
+      docs += `  This scheme requires providing an \`authnToken\` parameter with each API call.\n`;
+      docs += `  The token will be used as a Bearer token in the Authorization header.\n`;
+      continue;
+    }
 
     if (scheme.type === 'apiKey') {
       const envVar = getEnvVarName(name, 'API_KEY');

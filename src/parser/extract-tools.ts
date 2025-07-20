@@ -16,6 +16,7 @@ export function extractToolsFromApi(api: OpenAPIV3.Document): McpToolDefinition[
   const tools: McpToolDefinition[] = [];
   const usedNames = new Set<string>();
   const globalSecurity = api.security || [];
+  const securitySchemes = api.components?.securitySchemes || {};
 
   if (!api.paths) return tools;
 
@@ -44,16 +45,16 @@ export function extractToolsFromApi(api: OpenAPIV3.Document): McpToolDefinition[
       const description =
         operation.description || operation.summary || `Executes ${method.toUpperCase()} ${path}`;
 
-      // Generate input schema and extract parameters
-      const { inputSchema, parameters, requestBodyContentType } =
-        generateInputSchemaAndDetails(operation);
-
-      // Extract parameter details for execution
-      const executionParameters = parameters.map((p) => ({ name: p.name, in: p.in }));
-
       // Determine security requirements
       const securityRequirements =
         operation.security === null ? globalSecurity : operation.security || globalSecurity;
+
+      // Generate input schema and extract parameters
+      const { inputSchema, parameters, requestBodyContentType } =
+        generateInputSchemaAndDetails(operation, securityRequirements, securitySchemes);
+
+      // Extract parameter details for execution
+      const executionParameters = parameters.map((p) => ({ name: p.name, in: p.in }));
 
       // Create the tool definition
       tools.push({
@@ -78,9 +79,15 @@ export function extractToolsFromApi(api: OpenAPIV3.Document): McpToolDefinition[
  * Generates input schema and extracts parameter details from an operation
  *
  * @param operation OpenAPI operation object
+ * @param securityRequirements Security requirements for this operation
+ * @param securitySchemes Security schemes from the OpenAPI spec
  * @returns Input schema, parameters, and request body content type
  */
-export function generateInputSchemaAndDetails(operation: OpenAPIV3.OperationObject): {
+export function generateInputSchemaAndDetails(
+  operation: OpenAPIV3.OperationObject,
+  securityRequirements: OpenAPIV3.SecurityRequirementObject[],
+  securitySchemes: Record<string, OpenAPIV3.SecuritySchemeObject | OpenAPIV3.ReferenceObject>
+): {
   inputSchema: JSONSchema7 | boolean;
   parameters: OpenAPIV3.ParameterObject[];
   requestBodyContentType?: string;
@@ -104,6 +111,20 @@ export function generateInputSchemaAndDetails(operation: OpenAPIV3.OperationObje
     properties[param.name] = paramSchema;
     if (param.required) required.push(param.name);
   });
+
+  // Check if AuthNToken security scheme is used in security requirements
+  const hasAuthNToken = securityRequirements.some(requirement =>
+    Object.keys(requirement).includes('AuthNToken')
+  );
+
+  // Add authnToken parameter if AuthNToken security scheme is present
+  if (hasAuthNToken && securitySchemes.AuthNToken) {
+    properties['authnToken'] = {
+      type: 'string',
+      description: 'Authentication token to be used as Bearer token in Authorization header'
+    };
+    required.push('authnToken');
+  }
 
   // Process request body (if present)
   let requestBodyContentType: string | undefined = undefined;
