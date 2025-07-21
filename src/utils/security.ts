@@ -150,7 +150,7 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
 async function acquireAuthNToken(): Promise<string | null> {
     try {
         // Get the token URL from environment variable or use default
-        const tokenUrl = process.env['AUTHN_TOKEN_URL'] || 'http://localhost:8089';
+        const tokenUrl = process.env['AUTHN_TOKEN_URL'] || 'http://localhost:8089/token';
 
         console.error(\`Requesting AuthNToken from \${tokenUrl}\`);
         
@@ -159,14 +159,14 @@ async function acquireAuthNToken(): Promise<string | null> {
             method: 'GET',
             url: tokenUrl,
             headers: {
-                'Accept': 'application/json'
+                'Accept': 'text/plain'
             },
             timeout: 10000 // 10 second timeout
         });
         
         // Process the response
-        if (response.data?.token) {
-            return response.data.token;
+        if (response.data) {
+            return response.data;
         } else {
             console.error(\`Failed to acquire AuthNToken from \${tokenUrl}: No token in response\`);
             return null;
