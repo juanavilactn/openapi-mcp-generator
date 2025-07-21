@@ -112,11 +112,14 @@ export function generateInputSchemaAndDetails(
     if (param.required) required.push(param.name);
   });
 
+  // Process request body (if present)
   let requestBodyContentType: string | undefined = undefined;
 
   if (operation.requestBody) {
     const opRequestBody = operation.requestBody as OpenAPIV3.RequestBodyObject;
     const jsonContent = opRequestBody.content?.['application/json'];
+    const multipartFormContent = opRequestBody.content?.['multipart/form-data'];
+    const multipartMixedContent = opRequestBody.content?.['multipart/mixed'];
     const firstContent = opRequestBody.content
       ? Object.entries(opRequestBody.content)[0]
       : undefined;
@@ -132,6 +135,40 @@ export function generateInputSchemaAndDetails(
 
       properties['requestBody'] = bodySchema;
       if (opRequestBody.required) required.push('requestBody');
+    } else if (multipartFormContent?.schema || multipartMixedContent?.schema) {
+      // Handle both multipart/form-data and multipart/mixed
+      const multipartContent = multipartFormContent || multipartMixedContent;
+      const contentType = multipartFormContent ? 'multipart/form-data' : 'multipart/mixed';
+
+      requestBodyContentType = contentType;
+      const multipartSchema = mapOpenApiSchemaToJsonSchema(multipartContent!.schema as OpenAPIV3.SchemaObject);
+
+      // Process multipart schema to handle individual parts
+      if (typeof multipartSchema === 'object' && multipartSchema.properties) {
+        // Add each multipart field as individual properties
+        for (const [fieldName, fieldSchema] of Object.entries(multipartSchema.properties)) {
+          if (typeof fieldSchema === 'object' && fieldSchema !== null) {
+            const processedSchema = { ...fieldSchema };
+
+            // Special handling for file fields
+            if (fieldSchema.type === 'string' && (fieldSchema.format === 'binary' || fieldSchema.format === 'base64')) {
+              processedSchema.description = (processedSchema.description || '') +
+                ' (Can be a file path or URL - content will be downloaded automatically)';
+              processedSchema.type = 'string';
+              processedSchema.format = 'file-or-url';
+            }
+
+            properties[fieldName] = processedSchema;
+          } else {
+            properties[fieldName] = fieldSchema;
+          }
+        }
+
+        // Add required fields from multipart schema
+        if (multipartSchema.required && Array.isArray(multipartSchema.required)) {
+          required.push(...multipartSchema.required);
+        }
+      }
     } else if (firstContent) {
       const [contentType] = firstContent;
       requestBodyContentType = contentType;

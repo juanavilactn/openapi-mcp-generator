@@ -421,6 +421,114 @@ export function generateExecuteApiToolFunction(
 ${oauth2TokenAcquisitionCode}
 
 /**
+ * Downloads content from a URL or reads from a file path
+ * 
+ * @param fileOrUrl File path or URL
+ * @returns Buffer with file content and filename
+ */
+async function downloadFileContent(fileOrUrl: string): Promise<{ buffer: Buffer; filename: string }> {
+    try {
+        // Check if it's a URL
+        if (fileOrUrl.startsWith('http://') || fileOrUrl.startsWith('https://')) {
+            console.error(\`Downloading file from URL: \${fileOrUrl}\`);
+            const response = await axios({
+                method: 'GET',
+                url: fileOrUrl,
+                responseType: 'arraybuffer'
+            });
+            
+            // Extract filename from URL or Content-Disposition header
+            let filename = 'downloaded_file';
+            
+            // Try to get filename from Content-Disposition header
+            const contentDisposition = response.headers['content-disposition'];
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename[^;=\\\\n]*=((['"]).*?\\\\2|[^;\\\\n]*)/);
+                if (filenameMatch) {
+                    filename = filenameMatch[1].replace(/['"]/g, '');
+                }
+            } else {
+                // Extract from URL path
+                const urlPath = new URL(fileOrUrl).pathname;
+                const urlFilename = urlPath.split('/').pop();
+                if (urlFilename && urlFilename.includes('.')) {
+                    filename = urlFilename;
+                }
+            }
+            
+            return {
+                buffer: Buffer.from(response.data),
+                filename
+            };
+        } else {
+            // It's a file path
+            console.error(\`Reading file from path: \${fileOrUrl}\`);
+            const buffer = await fs.readFile(fileOrUrl);
+            const filename = path.basename(fileOrUrl);
+            
+            return {
+                buffer,
+                filename
+            };
+        }
+    } catch (error) {
+        throw new Error(\`Failed to download/read file from "\${fileOrUrl}": \${error instanceof Error ? error.message : String(error)}\`);
+    }
+}
+
+/**
+ * Creates a FormData object from multipart field values
+ * 
+ * @param validatedArgs Validated arguments from the tool call
+ * @param definition Tool definition
+ * @returns FormData object ready for submission
+ */
+async function createMultipartFormData(validatedArgs: JsonObject, definition: McpToolDefinition): Promise<FormData> {
+    const formData = new FormData();
+    
+    // Get all properties that are not execution parameters (path, query, header params)
+    const executionParamNames = new Set(definition.executionParameters.map(p => p.name));
+    
+    for (const [fieldName, fieldValue] of Object.entries(validatedArgs)) {
+        // Skip execution parameters and requestBody (those are handled elsewhere)
+        if (executionParamNames.has(fieldName) || fieldName === 'requestBody') {
+            continue;
+        }
+        
+        if (typeof fieldValue !== 'undefined' && fieldValue !== null) {
+            // Check if this field should be treated as a file
+            const inputSchema = definition.inputSchema;
+            const fieldSchema = typeof inputSchema === 'object' && inputSchema !== null && 
+                               inputSchema.properties ? inputSchema.properties[fieldName] : null;
+            
+            const isFileField = typeof fieldSchema === 'object' && fieldSchema !== null && 
+                              (fieldSchema.format === 'binary' || 
+                               fieldSchema.format === 'base64' || 
+                               fieldSchema.format === 'file-or-url');
+            
+            if (isFileField && typeof fieldValue === 'string') {
+                try {
+                    // Download/read the file
+                    const { buffer, filename } = await downloadFileContent(fieldValue);
+                    formData.append(fieldName, buffer, filename);
+                    console.error(\`Added file field '\${fieldName}': \${filename} (\${buffer.length} bytes)\`);
+                } catch (error) {
+                    console.error(\`Error handling file field '\${fieldName}': \${error instanceof Error ? error.message : String(error)}\`);
+                    // Fallback to treating it as a string value
+                    formData.append(fieldName, String(fieldValue));
+                }
+            } else {
+                // Regular field - convert to string
+                formData.append(fieldName, String(fieldValue));
+                console.error(\`Added form field '\${fieldName}': \${String(fieldValue)}\`);
+            }
+        }
+    }
+    
+    return formData;
+}
+
+/**
  * Executes an API tool with the provided arguments
  * 
  * @param toolName Name of the tool to execute
@@ -482,8 +590,24 @@ async function executeApiTool(
     // Construct the full URL
     const requestUrl = API_BASE_URL ? \`\${API_BASE_URL}\${urlPath}\` : urlPath;
 
-    // Handle request body if needed
-    if (definition.requestBodyContentType && typeof validatedArgs['requestBody'] !== 'undefined') {
+    // Handle request body based on content type
+    if (definition.requestBodyContentType === 'multipart/form-data' || definition.requestBodyContentType === 'multipart/mixed') {
+        // Handle multipart/form-data and multipart/mixed - create FormData from individual fields
+        try {
+            const formData = await createMultipartFormData(validatedArgs, definition);
+            requestBodyData = formData;
+            
+            // Remove the content-type header - axios will set it automatically with the boundary
+            delete headers['content-type'];
+            
+            console.error(\`Created \${definition.requestBodyContentType} with \${Object.keys(validatedArgs).filter(k => !definition.executionParameters.find(p => p.name === k) && k !== 'requestBody').length} fields\`);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(\`Error creating \${definition.requestBodyContentType}: \${errorMessage}\`);
+            return { content: [{ type: 'text', text: \`Error creating \${definition.requestBodyContentType}: \${errorMessage}\` }] };
+        }
+    } else if (definition.requestBodyContentType && typeof validatedArgs['requestBody'] !== 'undefined') {
+        // Handle other content types (JSON, etc.)
         requestBodyData = validatedArgs['requestBody'];
         headers['content-type'] = definition.requestBodyContentType;
     }
@@ -656,3 +780,4 @@ export function getSecuritySchemesDocs(
 
   return docs;
 }
+

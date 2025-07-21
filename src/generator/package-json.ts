@@ -36,6 +36,7 @@ export function generatePackageJson(
       dotenv: '^16.4.5',
       zod: '^3.24.3',
       'json-schema-to-zod': '^2.6.1',
+      'form-data': '^4.0.0',
     },
     devDependencies: {
       '@types/node': '^22.15.2',

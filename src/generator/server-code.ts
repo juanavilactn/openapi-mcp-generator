@@ -105,6 +105,9 @@ import {
 import { z, ZodError } from 'zod';
 import { jsonSchemaToZod } from 'json-schema-to-zod';
 import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';
+import fs from 'fs/promises';
+import path from 'path';
+import FormData from 'form-data';
 
 /**
  * Type definition for JSON objects
